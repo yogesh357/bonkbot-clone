@@ -1,0 +1,5 @@
+
+1.Trading bot
+2. LP bot
+3. Copy Trading bot
+4. ????
