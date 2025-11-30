@@ -27,6 +27,8 @@ const DEFAULT_KEYBOARD = Markup.inlineKeyboard([
     [Markup.button.callback("Buy", "buy")],
 ]);
 bot.start(async (ctx) => {
+    console.log("======================", ctx);
+    console.log("======================----------", ctx.chat.id.toString());
     const existingUser = await prismaClient.users.findFirst({
         where: {
             tgUserId: ctx.chat.id.toString(),

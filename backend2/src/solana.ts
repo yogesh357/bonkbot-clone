@@ -12,9 +12,9 @@ const rpcConnection = new Connection(process.env.RPC_URL!);
 interface returnPromise {
   empty: boolean;
   message: string;
-}
+} 
 
-console.log("+++=+===========", process.env.RPC_URL!);
+// console.log("+++=+===========", process.env.RPC_URL!);
 
 export async function getBalanceMessge(
   public_key: string

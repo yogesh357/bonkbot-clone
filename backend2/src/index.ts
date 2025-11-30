@@ -19,7 +19,7 @@ const prismaClient = new PrismaClient({ adapter });
 
 //:TG -bot
 const bot = new Telegraf(process.env.TELEGRAM_BOT_TOKEN!);
-  
+
 //:RPC-connection
 // const rpcConnection = new Connection(process.env.REC_URL!);
 
@@ -221,10 +221,10 @@ bot.on("text", async (ctx) => {
           return;
         }
 
-        // Get quote from Jupiter
+        //* Get me the best exchange rate to convert X SOL into Token Y 
         const quote = await getQuote(
-          "So11111111111111111111111111111111111111112", // SOL mint (fixed)
-          pending.mint, // token mint user selected
+          "So11111111111111111111111111111111111111112", //* from = SOL
+          pending.mint, //* to = user token
           amountInSol * LAMPORTS_PER_SOL
         );
 

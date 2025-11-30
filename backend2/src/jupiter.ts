@@ -14,7 +14,7 @@ const JUP_URL = "https://lite-api.jup.ag/swap/v1";
 const SOLANA_RPC_URL = process.env.RPC_URL as string;
 export const connection = new Connection(SOLANA_RPC_URL, "confirmed");
 
-// (1) Get Quote
+//* Get me the best exchange rate to convert X SOL into Token Y
 export async function getQuote(
   fromMint: string,
   toMint: string,
@@ -84,7 +84,6 @@ export async function swap(
 
     let secretKey: Uint8Array;
 
-    // Check if it's stored as comma-separated Uint8Array (incorrect format)
     if (privateKey.includes(",")) {
       console.log("🔄 Converting comma-separated private key to Uint8Array...");
 

@@ -2,7 +2,7 @@ import { Connection, Keypair, LAMPORTS_PER_SOL, PublicKey, } from "@solana/web3.
 import dotenv from "dotenv";
 dotenv.config();
 const rpcConnection = new Connection(process.env.RPC_URL);
-console.log("+++=+===========", process.env.RPC_URL);
+// console.log("+++=+===========", process.env.RPC_URL!);
 export async function getBalanceMessge(public_key) {
     const balance = await rpcConnection.getBalance(new PublicKey(public_key));
     if (balance) {
