@@ -1,4 +1,3 @@
-// import { PrismaClient } from "@prisma/client/extension";
 import { Markup, Telegraf } from "telegraf";
 import { Connection, Keypair, LAMPORTS_PER_SOL } from "@solana/web3.js";
 import { PrismaClient } from "./generated/prisma/client.js";
@@ -6,8 +5,8 @@ import { PrismaClient } from "./generated/prisma/client.js";
 import { Pool } from "pg";
 import { PrismaPg } from "@prisma/adapter-pg";
 import dotenv from "dotenv";
-import { getBalanceMessge } from "./solana.js";
-import { getQuote, swap } from "./jupiter.js";
+import { formatOutAmount, getBalanceMessge, getPortfolio } from "./solana.js";
+import { addPricesToPortfolio, getQuote, swap } from "./jupiter.js";
 dotenv.config();
 
 //:prisma
@@ -22,12 +21,13 @@ const bot = new Telegraf(process.env.TELEGRAM_BOT_TOKEN!);
 
 //:RPC-connection
 // const rpcConnection = new Connection(process.env.REC_URL!);
-
 const PENDING_USER_BUYS: Record<
   string,
   {
     isPending: boolean;
     mint?: string;
+    amount?: number;
+    quote?: any;
   }
 > = {};
 
@@ -36,7 +36,10 @@ const DEFAULT_KEYBOARD = Markup.inlineKeyboard([
     Markup.button.callback("Show public Key", "public_key"),
     Markup.button.callback("Show private Key", "private_key"),
   ],
-  [Markup.button.callback("Buy", "buy")],
+  [
+    Markup.button.callback("Buy", "buy"),
+    Markup.button.callback("Account", "account"),
+  ],
 ]);
 
 bot.start(async (ctx: any) => {
@@ -45,7 +48,6 @@ bot.start(async (ctx: any) => {
       tgUserId: ctx.chat.id.toString(),
     },
   });
-  // ctx.reply("welcome");
   if (existingUser) {
     const publicKey = existingUser.publicKey;
     const { empty, message } = await getBalanceMessge(
@@ -53,10 +55,13 @@ bot.start(async (ctx: any) => {
     );
 
     ctx.reply(
-      `Welcome back and here is your public key : ${publicKey} , now you can trade Solana with it.
-      ${empty ? message : message}
-      `,
+      `<b>👋 Welcome Back!</b>\n\n` +
+        `Your Solana wallet is ready to use 🚀\n\n` +
+        `<b>Public Key:</b>\n<code>${publicKey}</code>\n\n` +
+        `${message}\n\n` +
+        `You can now securely trade and manage Solana assets directly from this bot ✨`,
       {
+        parse_mode: "HTML",
         ...DEFAULT_KEYBOARD,
       }
     );
@@ -72,12 +77,60 @@ bot.start(async (ctx: any) => {
     const publicKey = keypair.publicKey.toString();
 
     ctx.reply(
-      `Welcome back and here is your public key : ${publicKey} , now you can trade Solana with it.`,
+      `<b>👋 Welcome Back!</b>\n\n` +
+        `Your Solana wallet is ready for trading on the network 🚀\n\n` +
+        `<b>Public Key:</b>\n<code>${publicKey}</code>\n\n` +
+        `Use this address to deposit SOL or tokens and start swapping instantly ✨`,
       {
+        parse_mode: "HTML",
         ...DEFAULT_KEYBOARD,
       }
     );
   }
+});
+
+bot.command("portfolio", async (ctx) => {
+  const chatId = ctx.chat?.id.toString();
+  if (!chatId) return;
+
+  const user = await prismaClient.users.findFirst({
+    where: { tgUserId: chatId },
+  });
+
+  if (!user) {
+    return ctx.reply(
+      `<b>⚠️ Wallet not registered!</b>\nUse /start to create one.`,
+      { parse_mode: "HTML" }
+    );
+  }
+
+  await ctx.reply("📡 Fetching your portfolio...");
+
+  const tokens = await getPortfolio(user.publicKey);
+  const portfolio = await addPricesToPortfolio(tokens);
+
+  if (portfolio.length === 0) {
+    return ctx.reply(
+      `<b>📭 No tokens found</b>\nDeposit SPL tokens to view portfolio.`,
+      { parse_mode: "HTML" }
+    );
+  }
+
+  let totalValue = 0;
+
+  const lines = portfolio.map((t) => {
+    totalValue += t.value;
+    return `${t.mint}\n<b>${t.amount.toFixed(4)}</b> (~$${t.value.toFixed(
+      2
+    )})\n`;
+  });
+
+  return ctx.reply(
+    `<b>📊 Your Portfolio</b>\n\n` +
+      lines.join("\n") +
+      `\n<b>💎 Total Value:</b> $${totalValue.toFixed(2)}`,
+    { parse_mode: "HTML" }
+  );
 });
 
 bot.action("private_key", async (ctx) => {
@@ -88,26 +141,19 @@ bot.action("private_key", async (ctx) => {
       tgUserId,
     },
   });
-  return ctx.reply(`Your private key is ${user?.privateKey}`, {
-    ...DEFAULT_KEYBOARD,
-  });
+  return ctx.reply(
+    `<b>⚠️ Sensitive Information</b>\n\n` +
+      `Here is your <b>Private Key</b> — keep this <u>absolutely secret</u>.\n` +
+      `Anyone with this key can control your funds.\n\n` +
+      `<code>${user?.privateKey}</code>\n\n` +
+      `Do <b>not</b> share or store it in screenshots or chats.`,
+    {
+      parse_mode: "HTML",
+      ...DEFAULT_KEYBOARD,
+    }
+  );
 });
 
-// bot.action("public_key", async (ctx) => {
-//   const tgUserId = ctx?.chat?.id.toString()!;
-//   const user = await prismaClient.users.findFirst({
-//     where: {
-//       tgUserId,
-//     },
-//   });
-//   const { empty, message } = await getBalanceMessge(user.publicKey.toString());
-//   return ctx.reply(
-//     `Your public key is ${user?.publicKey} . ${empty ? message : message}`,
-//     {
-//       ...DEFAULT_KEYBOARD,
-//     }
-//   );
-// });
 bot.action("public_key", async (ctx) => {
   const tgUserId = ctx.chat?.id.toString();
 
@@ -120,14 +166,24 @@ bot.action("public_key", async (ctx) => {
   });
 
   if (!user) {
-    return ctx.reply("You are not registered yet! Please register first.");
+    return ctx.reply(
+      `<b>⚠️ Wallet Not Found</b>\n\n` +
+        `You are not registered yet. Please use /start to create your Solana wallet.`,
+      { parse_mode: "HTML" }
+    );
   }
 
   const { empty, message } = await getBalanceMessge(user.publicKey);
 
   return ctx.reply(
-    `Your public key is: ${user.publicKey}\n\n${message}`,
-    DEFAULT_KEYBOARD
+    `<b>🔐 Your Wallet</b>\n\n` +
+      `<b>Public Key:</b>\n<code>${user.publicKey}</code>\n\n` +
+      `${message}\n\n` +
+      `You can now trade Solana tokens securely 🚀`,
+    {
+      parse_mode: "HTML",
+      ...DEFAULT_KEYBOARD,
+    }
   );
 });
 
@@ -135,129 +191,179 @@ bot.action("buy", async (ctx) => {
   PENDING_USER_BUYS[ctx.chat?.id!] = {
     isPending: true,
   };
-  return ctx.reply("What token mint do you wnat to buy");
+  return ctx.reply(
+    `<b>🪙 Select Your Token</b>\n\n` +
+      `Please enter the <b>token mint address</b> you want to buy.\n\n` +
+      `Example:\n<code>EPjFWdd5AufqSSqeM2qN1xzybapC8G4wEGGkZwyTDt1v</code> (USDC)`,
+    {
+      parse_mode: "HTML",
+      ...DEFAULT_KEYBOARD,
+    }
+  );
 });
 
-// bot.on("text", (ctx) => {
-//   const message = ctx.message.text;
-//   if (PENDING_USER_BUYS[ctx.chat.id]?.isPending) {
-//     PENDING_USER_BUYS[ctx.chat.id!]?.mint = message;
-//   }
-// });
-
-// bot.on("text", async (ctx) => {
-//   const chatId = ctx.chat?.id.toString();
-//   const message = ctx.message.text;
-
-//   if (!chatId) return; // safety check
-
-//   const pending = PENDING_USER_BUYS[chatId];
-
-//   if (pending?.isPending) {
-//     pending.mint = message;
-//     ctx.reply(`Mint updated to: ${message}`);
-//   } else if (pending?.isPending && pending.mint) {
-//     const amount = message;
-//     const swapTxn = await swap(
-//       "So11111111111111111111111111112",
-//       pending.mint,
-//       Number(message) * LAMPORTS_PER_SOL
-//     );
-//     delete PENDING_USER_BUYS[chatId];
-//     // const quote = await getQuote(
-//     //   "So11111111111111111111111111112", // SOL Mint
-//     //   pending.mint, // token mint user selected
-//     //   Number(message) * LAMPORTS_PER_SOL
-//     // );
-//     // if (!quote) return ctx.reply("Failed to fetch quote. Try again!");
-//     // const swapTxn = await swap(
-//     //   quote,
-//     //   , // must store this for user
-//     //   pending.privateKey // securely stored!
-//     // );
-//     ctx.reply(
-//       `Swap Succesful , you can track it here https://solscan.io/tx/${swapTxn}`
-//     );
-//   }
-// });
-
+ 
 bot.on("text", async (ctx) => {
   const chatId = ctx.chat?.id.toString();
   const message = ctx.message.text;
 
-  if (!chatId) return; // safety check
+  if (!chatId) return;
 
   const pending = PENDING_USER_BUYS[chatId];
 
-  if (pending?.isPending) {
-    // If mint is not set yet, this is the first message (mint address)
+  if (pending?.isPending) { 
     if (!pending.mint) {
       pending.mint = message;
-      ctx.reply(
-        `Mint set to: ${message}\n\nNow please enter the amount in SOL you want to spend:`
+
+      return ctx.reply(
+        `<b>🪙 Token Selected</b>\n\n` +
+          `Mint Address:\n<code>${message}</code>\n\n` +
+          `Now enter the <b>SOL amount</b> you want to spend:`,
+        { parse_mode: "HTML" }
       );
     }
-    // If mint is already set, this is the second message (amount)
-    else {
-      const amountInSol = parseFloat(message);
+ 
+    const amountInSol = parseFloat(message);
 
-      // Validate amount
-      if (isNaN(amountInSol) || amountInSol <= 0) {
-        ctx.reply("Please enter a valid amount in SOL (e.g., 0.1, 1.5)");
-        return;
+    if (isNaN(amountInSol) || amountInSol <= 0) {
+      return ctx.reply(
+        `<b>⚠️ Invalid Amount</b>\n` +
+          `Please enter a valid number (e.g., 0.1, 1, 2.5)`,
+        { parse_mode: "HTML" }
+      );
+    }
+
+    try {
+      await ctx.reply("📡 Fetching swap preview…");
+
+      const user = await prismaClient.users.findFirst({
+        where: { tgUserId: chatId },
+      });
+
+      if (!user) {
+        delete PENDING_USER_BUYS[chatId];
+        return ctx.reply(
+          `<b>⚠️ Wallet Not Found</b>\nUse /start to create a wallet.`,
+          { parse_mode: "HTML" }
+        );
       }
 
-      try {
-        ctx.reply("🔄 Processing your swap...");
+      const lamports = amountInSol * LAMPORTS_PER_SOL;
 
-        // Get user from database to access their wallet
-        const user = await prismaClient.users.findFirst({
-          where: { tgUserId: chatId },
-        });
+      const quote = await getQuote(
+        "So11111111111111111111111111111111111111112",
+        pending.mint,
+        lamports
+      );
 
-        if (!user) {
-          ctx.reply("User not found. Please start over with /start");
-          delete PENDING_USER_BUYS[chatId];
-          return;
-        }
-
-        //* Get me the best exchange rate to convert X SOL into Token Y 
-        const quote = await getQuote(
-          "So11111111111111111111111111111111111111112", //* from = SOL
-          pending.mint, //* to = user token
-          amountInSol * LAMPORTS_PER_SOL
-        );
-
-        if (!quote) {
-          ctx.reply(
-            "Failed to get quote. Please check the mint address and try again."
-          );
-          delete PENDING_USER_BUYS[chatId];
-          return;
-        }
-
-        // Perform swap using user's wallet
-        const swapTxn = await swap(quote, user.publicKey, user.privateKey);
-
-        if (!swapTxn) {
-          ctx.reply("Swap failed. Please try again.");
-          delete PENDING_USER_BUYS[chatId];
-          return;
-        }
-
-        // Clean up and show success
+      if (!quote) {
         delete PENDING_USER_BUYS[chatId];
-        ctx.reply(
-          `✅ Swap Successful!\n\nYou can track it here: https://solscan.io/tx/${swapTxn}`,
-          DEFAULT_KEYBOARD
+        return ctx.reply(
+          `<b>❌ Failed to fetch price quote</b>\nTry again later.`,
+          { parse_mode: "HTML" }
         );
-      } catch (error) {
-        console.error("Swap error:", error);
-        ctx.reply("❌ An error occurred during the swap. Please try again.");
-        delete PENDING_USER_BUYS[chatId];
       }
+ 
+      pending.quote = quote;
+      pending.amount = lamports;
+      console.log("=================QUOTE+++==>>>", quote);
+      console.log("=================QUOTE+++==>>>", quote.outAmount);
+      
+      const solAmount = Number(quote.inAmount) / 1e9;
+      const tokenAmount = Number(quote.outAmount);
+      const humanAmount = await formatOutAmount(
+        quote.outputMint,
+        quote.outAmount
+      );
+      return ctx.reply(
+        `<b>📊 Swap Preview</b>\n\n` +
+          `<b>You Pay:</b> ${solAmount} SOL (~$${Number(
+            quote.swapUsdValue
+          ).toFixed(2)})\n` + 
+          `You Receive: ${humanAmount.toFixed(4)} tokens \n` +
+          `<b>Slippage:</b> ${(quote.slippageBps / 100).toFixed(2)}%\n` +
+          `<b>Price Impact:</b> ${Number(quote.priceImpactPct).toFixed(
+            2
+          )}%\n\n` +
+          `Confirm to continue:`,
+        {
+          parse_mode: "HTML",
+          reply_markup: {
+            inline_keyboard: [
+              [{ text: "✅ Confirm Swap", callback_data: "confirm_swap" }],
+              [{ text: "❌ Cancel", callback_data: "cancel_swap" }],
+            ],
+          },
+        }
+      );
+    } catch (error) {
+      console.error("▶ Preview error:", error);
+      delete PENDING_USER_BUYS[chatId];
+      return ctx.reply(`<b>⚠️ Unexpected error</b>\nPlease try again.`, {
+        parse_mode: "HTML",
+      });
     }
   }
+});
+
+bot.action("account", async (ctx) => {
+  const tgUserId = ctx?.chat?.id;
+  if (!tgUserId) return console.log("no connection");
+
+  const user = await prismaClient.users.findFirst({
+    where: {
+      tgUserId: tgUserId.toString(),
+    },
+  });
+
+  return ctx.reply(
+    `<b>🔐 Account Info</b>\n\n` +
+      `<b>Public Key:</b> <code>${user?.publicKey}</code>\n` +
+      `<b>Private Key:</b> <code>${user?.privateKey}</code>`,
+    {
+      parse_mode: "HTML",
+      ...DEFAULT_KEYBOARD,
+    }
+  );
+});
+
+bot.action("confirm_swap", async (ctx) => {
+  const chatId = ctx.chat?.id.toString();
+  if (!chatId) return;
+
+  const pending = PENDING_USER_BUYS[chatId];
+  if (!pending?.quote) return ctx.reply("Session expired");
+
+  const user = await prismaClient.users.findFirst({
+    where: { tgUserId: chatId },
+  });
+
+  if (!user) return ctx.reply("Wallet not found. Use /start");
+
+  ctx.reply("🔄 Executing swap…");
+
+  const txid = await swap(pending.quote, user.publicKey, user.privateKey);
+
+  delete PENDING_USER_BUYS[chatId];
+
+  if (!txid) {
+    return ctx.reply("❌ Swap failed. Please try again later.");
+  }
+
+  return ctx.reply(
+    `<b>🎉 Swap Successful!</b>\n\n` +
+      `<a href="https://solscan.io/tx/${txid}">View on Solscan 📈</a>`,
+    { parse_mode: "HTML" }
+  );
+});
+
+bot.action("cancel_swap", (ctx) => {
+  const chatId = ctx.chat?.id.toString();
+  delete PENDING_USER_BUYS[chatId!];
+
+  ctx.reply(`<b>🚫 Swap canceled</b>\nStart again anytime with Buy button.`, {
+    parse_mode: "HTML",
+  });
 });
 
 bot.launch();

@@ -37,41 +37,6 @@ export async function getQuote(
   }
 }
 
-// export async function swap(
-//   quote: any,
-//   userPublicKey: string,
-//   privateKey: string
-// ) {
-//   try {
-//     const response = await axios.post(`${JUP_URL}/swap`, {
-//       quoteResponse: quote,
-//       userPublicKey,
-//       wrapAndUnwrapSol: true,
-//     });
-
-//     const swapTransactionBuf = Buffer.from(
-//       response.data.swapTransaction,
-//       "base64"
-//     );
-//     const transaction = VersionedTransaction.deserialize(swapTransactionBuf);
-
-//     // const decodedKey = bs58.decode(privateKey);
-//     // transaction.sign([decodedKey]);
-//     const keypair = Keypair.fromSecretKey(bs58.decode(privateKey));
-//     transaction.sign([keypair]);
-//     const txid = await connection.sendRawTransaction(transaction.serialize(), {
-//       skipPreflight: false,
-//       maxRetries: 5,
-//     });
-
-//     await connection.confirmTransaction(txid, "confirmed");
-//     return txid;
-//   } catch (error) {
-//     console.log("SWAP ERROR:", error);
-//     return null;
-//   }
-// }
-
 export async function swap(
   quote: any,
   userPublicKey: string,
@@ -80,7 +45,6 @@ export async function swap(
   try {
     console.log("🔍 SWAP DEBUG - START");
     console.log("User Public Key:", userPublicKey);
-    console.log("Private Key type:", typeof privateKey);
 
     let secretKey: Uint8Array;
 
@@ -133,4 +97,37 @@ export async function swap(
     console.log("❌ SWAP ERROR:", error.message);
     return null;
   }
+}
+
+export async function addPricesToPortfolio(
+  tokens: { mint: string; amount: number }[]
+) {
+  // if (tokens.length === 0) return [];
+
+  const BATCH_SIZE = 50;
+  const results: any[] = [];
+
+  for (let i = 0; i < tokens.length; i += BATCH_SIZE) {
+    const batch = tokens.slice(i, i + BATCH_SIZE);
+    const mints = batch.map((t) => t.mint).join(",");
+
+    const resp = await axios.get("https://api.jup.ag/price/v3", {
+      params: { ids: mints },
+      headers: {
+        // If your project has an API key, include it here:
+        // "x-api-key": process.env.JUPITER_API_KEY
+      },
+    });
+
+    const priceData = resp.data as Record<string, { usdPrice: number }>;
+
+    for (const t of batch) {
+      const priceInfo = priceData[t.mint];
+      const price = priceInfo?.usdPrice ?? 0;
+      const value = t.amount * price;
+      results.push({ ...t, price, value });
+    }
+  }
+
+  return results;
 }
